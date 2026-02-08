@@ -8,6 +8,7 @@ export interface DiagramViewProps {
   loading: boolean;
   error: string | null;
   theme: Theme;
+  streaming?: boolean;
   selectedElements: string[];
   onSelectionChange: (elements: string[]) => void;
 }
@@ -20,7 +21,6 @@ function findSelectableId(target: Element, container: Element): string | null {
       const id = current.id || current.getAttribute("id");
       if (id && !id.startsWith("_")) return id;
     }
-    // Also check parent <g> elements
     if (current.parentElement instanceof SVGGElement) {
       const parentId = current.parentElement.id || current.parentElement.getAttribute("id");
       if (parentId && !parentId.startsWith("_")) return parentId;
@@ -97,11 +97,36 @@ function elementIntersectsRect(
   );
 }
 
+/** Read natural dimensions of an SVG element. */
+function getSvgDimensions(svgEl: SVGSVGElement): { w: number; h: number } {
+  // Try viewBox first
+  const vb = svgEl.viewBox?.baseVal;
+  if (vb && vb.width > 0 && vb.height > 0) {
+    return { w: vb.width, h: vb.height };
+  }
+  // Try width/height attributes
+  try {
+    const w = svgEl.width.baseVal.value;
+    const h = svgEl.height.baseVal.value;
+    if (w > 0 && h > 0) return { w, h };
+  } catch { /* some SVGs don't have these */ }
+  // Last resort: getBoundingClientRect
+  const rect = svgEl.getBoundingClientRect();
+  return { w: rect.width || 400, h: rect.height || 300 };
+}
+
+/**
+ * DiagramView — pan/zoom SVG viewer with selection support.
+ *
+ * Transform model: `transformOrigin: 0 0` with explicit pan for centering.
+ * Screen coord = svgCoord * scale + pan
+ */
 export default function DiagramView({
   svgContent,
   loading,
   error,
   theme,
+  streaming = false,
   selectedElements,
   onSelectionChange,
 }: DiagramViewProps) {
@@ -109,11 +134,19 @@ export default function DiagramView({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  const panRef = useRef(pan);
+  panRef.current = pan;
+
   const dragging = useRef(false);
   const dragMoved = useRef(false);
   const marqueeJustFinished = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
   const colors = themeColors(theme);
+
+  // SVG natural dimensions
+  const svgSize = useRef({ w: 0, h: 0 });
 
   const [selectionMode, setSelectionMode] = useState(false);
   const selectionModeRef = useRef(selectionMode);
@@ -132,6 +165,53 @@ export default function DiagramView({
   const marqueeRef = useRef(marquee);
   marqueeRef.current = marquee;
 
+  /** Fit SVG to viewport with padding. */
+  const fitToView = useCallback(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const { w, h } = svgSize.current;
+    if (w === 0 || h === 0) return;
+
+    const wRect = wrapper.getBoundingClientRect();
+    if (wRect.width === 0 || wRect.height === 0) return;
+
+    const padding = 48;
+    const fitScale = Math.min(
+      (wRect.width - padding) / w,
+      (wRect.height - padding) / h,
+      1, // don't scale up beyond natural size
+    );
+
+    const scaledW = w * fitScale;
+    const scaledH = h * fitScale;
+
+    setScale(fitScale);
+    setPan({
+      x: (wRect.width - scaledW) / 2,
+      y: (wRect.height - scaledH) / 2,
+    });
+  }, []);
+
+  /** Zoom centered on viewport center (for +/- buttons). */
+  const zoomFromCenter = useCallback((factor: number) => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const rect = wrapper.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+
+    const oldScale = scaleRef.current;
+    const newScale = Math.max(0.05, Math.min(5, oldScale * factor));
+    const ratio = newScale / oldScale;
+    const oldPan = panRef.current;
+
+    setScale(newScale);
+    setPan({
+      x: cx - (cx - oldPan.x) * ratio,
+      y: cy - (cy - oldPan.y) * ratio,
+    });
+  }, []);
+
   // Inject SVG and post-process
   useEffect(() => {
     if (!containerRef.current || !svgContent) return;
@@ -139,10 +219,22 @@ export default function DiagramView({
 
     const svgEl = containerRef.current.querySelector("svg") as SVGSVGElement | null;
     if (svgEl) {
+      // Fix PlantUML's preserveAspectRatio="none" which causes distortion
+      svgEl.setAttribute("preserveAspectRatio", "xMidYMid meet");
+      svgEl.style.display = "block";
+
+      // Read natural dimensions
+      svgSize.current = getSvgDimensions(svgEl);
+
       injectSelectionStyles(svgEl);
       applyHighlights(containerRef.current, selectedRef.current);
+
+      // Auto-fit when not streaming
+      if (!streaming) {
+        requestAnimationFrame(() => fitToView());
+      }
     }
-  }, [svgContent]);
+  }, [svgContent, streaming, fitToView]);
 
   // Re-apply highlights when selection changes
   useEffect(() => {
@@ -159,7 +251,7 @@ export default function DiagramView({
     });
   }, [onSelectionChange]);
 
-  // Wheel zoom (native event for passive: false)
+  // Wheel zoom — cursor-centered (native event for passive: false)
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
@@ -167,8 +259,22 @@ export default function DiagramView({
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      setScale((prev) => Math.max(0.1, Math.min(5, prev * delta)));
+
+      const rect = wrapper.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const factor = e.deltaY > 0 ? 0.9 : 1.1;
+      const oldScale = scaleRef.current;
+      const newScale = Math.max(0.05, Math.min(5, oldScale * factor));
+      const ratio = newScale / oldScale;
+      const oldPan = panRef.current;
+
+      setScale(newScale);
+      setPan({
+        x: mouseX - (mouseX - oldPan.x) * ratio,
+        y: mouseY - (mouseY - oldPan.y) * ratio,
+      });
     };
 
     wrapper.addEventListener("wheel", handleWheel, { passive: false });
@@ -292,11 +398,6 @@ export default function DiagramView({
     if (marqueeRef.current?.active) setMarquee(null);
   }, []);
 
-  const resetView = useCallback(() => {
-    setScale(1);
-    setPan({ x: 0, y: 0 });
-  }, []);
-
   const marqueeRect = marquee?.active
     ? {
         left: Math.min(marquee.startX, marquee.currentX),
@@ -324,17 +425,15 @@ export default function DiagramView({
       onMouseLeave={handleMouseLeave}
       onClick={handleClick}
     >
-      {/* SVG container */}
+      {/* SVG container — absolute positioned, transformed for zoom/pan */}
       <div
         ref={containerRef}
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-          transformOrigin: "center center",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          minHeight: "100%",
-          padding: 24,
+          transformOrigin: "0 0",
+          position: "absolute",
+          top: 0,
+          left: 0,
         }}
       />
 
@@ -356,7 +455,7 @@ export default function DiagramView({
               width: 32,
               height: 32,
               border: "3px solid rgba(0,0,0,0.1)",
-              borderTopColor: SELECTION_COLOR,
+              borderTopColor: colors.accent,
               borderRadius: "50%",
               animation: "spin 0.8s linear infinite",
             }}
@@ -450,11 +549,11 @@ export default function DiagramView({
           zIndex: 10,
         }}
       >
-        <button onClick={() => setScale((s) => Math.max(0.1, s * 0.85))} style={{ ...zoomBtnStyle, color: colors.zoomText }} title="Zoom out">-</button>
-        <button onClick={resetView} style={{ ...zoomBtnStyle, minWidth: 48, fontSize: 11, color: colors.zoomText }} title="Reset view">
+        <button onClick={() => zoomFromCenter(0.85)} style={{ ...zoomBtnStyle, color: colors.zoomText }} title="Zoom out">-</button>
+        <button onClick={fitToView} style={{ ...zoomBtnStyle, minWidth: 48, fontSize: 11, color: colors.zoomText }} title="Fit to view">
           {Math.round(scale * 100)}%
         </button>
-        <button onClick={() => setScale((s) => Math.min(5, s * 1.15))} style={{ ...zoomBtnStyle, color: colors.zoomText }} title="Zoom in">+</button>
+        <button onClick={() => zoomFromCenter(1.15)} style={{ ...zoomBtnStyle, color: colors.zoomText }} title="Zoom in">+</button>
 
         <div style={{ width: 1, backgroundColor: colors.zoomBorder, margin: "2px 2px" }} />
         <button

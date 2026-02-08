@@ -396,6 +396,7 @@ function App() {
         loading={renderLoading}
         error={renderError}
         theme={theme}
+        streaming={streaming}
         selectedElements={selectedElements}
         onSelectionChange={setSelectedElements}
       />
