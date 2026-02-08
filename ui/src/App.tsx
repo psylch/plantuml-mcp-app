@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { App as McpApp, PostMessageTransport, useHostStyles, useDocumentTheme } from "@modelcontextprotocol/ext-apps/react";
-import DiagramView from "./components/DiagramView";
+import DiagramView, { type SelectedItem } from "./components/DiagramView";
 import CodeEditor from "./components/CodeEditor";
 import ViewSwitch, { type ViewMode } from "./components/ViewSwitch";
 import SendButton from "./components/SendButton";
@@ -48,7 +48,8 @@ function App() {
   const [, setPartial] = useState<string | null>(null);
   const [plantUmlCode, setPlantUmlCode] = useState<string>(SAMPLE_PLANTUML);
   const [streaming, setStreaming] = useState(false);
-  const [selectedElements, setSelectedElements] = useState<string[]>([]);
+  const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([]);
+  const selectedIds = useMemo(() => selectedItems.map((s) => s.id), [selectedItems]);
 
   // Rendered SVG content
   const [svgContent, setSvgContent] = useState<string | null>(null);
@@ -362,18 +363,18 @@ function App() {
   useEffect(() => {
     if (silentSyncTimer.current) clearTimeout(silentSyncTimer.current);
     silentSyncTimer.current = setTimeout(() => {
-      silentSync(app ?? null, plantUmlCode, selectedElements, detectedType);
+      silentSync(app ?? null, plantUmlCode, selectedItems, detectedType);
     }, 1500);
     return () => {
       if (silentSyncTimer.current) clearTimeout(silentSyncTimer.current);
     };
-  }, [app, plantUmlCode, selectedElements, detectedType]);
+  }, [app, plantUmlCode, selectedItems, detectedType]);
 
   // Handle "Send to Agent"
   const handleSendToAgent = useCallback(() => {
-    sendToAgent(app ?? null, changeLog, plantUmlCode, selectedElements, detectedType);
+    sendToAgent(app ?? null, changeLog, plantUmlCode, selectedItems, detectedType);
     setChangeCount(0);
-  }, [app, changeLog, plantUmlCode, selectedElements, detectedType]);
+  }, [app, changeLog, plantUmlCode, selectedItems, detectedType]);
 
   // Fullscreen toggle
   const handleToggleFullscreen = useCallback(async () => {
@@ -397,8 +398,8 @@ function App() {
         error={renderError}
         theme={theme}
         streaming={streaming}
-        selectedElements={selectedElements}
-        onSelectionChange={setSelectedElements}
+        selectedIds={selectedIds}
+        onSelectionChange={setSelectedItems}
       />
       <SendButton changeCount={changeCount} onClick={handleSendToAgent} theme={theme} />
     </div>

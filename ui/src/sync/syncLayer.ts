@@ -10,6 +10,13 @@
 
 import type { App as McpApp } from "@modelcontextprotocol/ext-apps/react";
 import type { ChangeLog } from "./changeLog";
+import type { SelectedItem } from "../components/DiagramView";
+
+/** Format selected items as readable text for AI context. */
+function formatSelection(items: SelectedItem[]): string {
+  if (items.length === 0) return "none";
+  return items.map((s) => s.label).join(", ");
+}
 
 /**
  * Silent sync: push current diagram state to AI context.
@@ -18,26 +25,22 @@ import type { ChangeLog } from "./changeLog";
 export function silentSync(
   app: McpApp | null,
   plantUmlCode: string,
-  selectedElements: string[],
+  selectedItems: SelectedItem[],
   diagramType: string,
 ): void {
   if (!app) return;
 
-  const selectionText = selectedElements.length > 0
-    ? selectedElements.join(", ")
-    : "none";
-
-  const text = [
+  const parts = [
     `Current diagram type: ${diagramType}`,
-    `Selected elements: ${selectionText}`,
+    `Selected elements: ${formatSelection(selectedItems)}`,
     "",
     "PlantUML code:",
     plantUmlCode,
-  ].join("\n");
+  ];
 
   try {
     app.updateModelContext({
-      content: [{ type: "text", text }],
+      content: [{ type: "text", text: parts.join("\n") }],
     });
   } catch {
     // updateModelContext may not be available in all hosts / standalone mode
@@ -52,15 +55,12 @@ export function sendToAgent(
   app: McpApp | null,
   changeLog: ChangeLog,
   plantUmlCode: string,
-  selectedElements: string[],
+  selectedItems: SelectedItem[],
   diagramType: string,
 ): void {
   if (!app) return;
 
   const delta = changeLog.serialize();
-  const selectionText = selectedElements.length > 0
-    ? selectedElements.join(", ")
-    : "none";
 
   const parts: string[] = [];
 
@@ -69,7 +69,7 @@ export function sendToAgent(
     parts.push(delta);
   }
 
-  parts.push(`Currently selected: ${selectionText}`);
+  parts.push(`Currently selected: ${formatSelection(selectedItems)}`);
   parts.push("");
   parts.push(`Full PlantUML code (${diagramType}):`);
   parts.push(plantUmlCode);

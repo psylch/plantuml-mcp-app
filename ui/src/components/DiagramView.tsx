@@ -3,14 +3,19 @@ import { type Theme, themeColors } from "../theme";
 
 const SELECTION_COLOR = "#3b82f6";
 
+export interface SelectedItem {
+  id: string;
+  label: string;
+}
+
 export interface DiagramViewProps {
   svgContent: string | null;
   loading: boolean;
   error: string | null;
   theme: Theme;
   streaming?: boolean;
-  selectedElements: string[];
-  onSelectionChange: (elements: string[]) => void;
+  selectedIds: string[];
+  onSelectionChange: (items: SelectedItem[]) => void;
 }
 
 /** Extract a usable ID from an SVG element by walking up to find a group with an id. */
@@ -97,6 +102,17 @@ function elementIntersectsRect(
   );
 }
 
+/** Extract readable text label from an SVG element (for AI context). */
+function extractElementLabel(el: Element): string {
+  const texts = el.querySelectorAll("text");
+  const parts: string[] = [];
+  texts.forEach((t) => {
+    const text = t.textContent?.trim();
+    if (text && !parts.includes(text)) parts.push(text);
+  });
+  return parts.join(" ") || el.id;
+}
+
 /** Read natural dimensions of an SVG element. */
 function getSvgDimensions(svgEl: SVGSVGElement): { w: number; h: number } {
   // Try viewBox first
@@ -127,7 +143,7 @@ export default function DiagramView({
   error,
   theme,
   streaming = false,
-  selectedElements,
+  selectedIds,
   onSelectionChange,
 }: DiagramViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -148,12 +164,15 @@ export default function DiagramView({
   // SVG natural dimensions
   const svgSize = useRef({ w: 0, h: 0 });
 
+  // Label map: SVG element ID → extracted text label (populated on SVG inject)
+  const labelMap = useRef<Map<string, string>>(new Map());
+
   const [selectionMode, setSelectionMode] = useState(false);
   const selectionModeRef = useRef(selectionMode);
   selectionModeRef.current = selectionMode;
 
-  const selectedRef = useRef(selectedElements);
-  selectedRef.current = selectedElements;
+  const selectedRef = useRef(selectedIds);
+  selectedRef.current = selectedIds;
 
   const [marquee, setMarquee] = useState<{
     active: boolean;
@@ -164,6 +183,14 @@ export default function DiagramView({
   } | null>(null);
   const marqueeRef = useRef(marquee);
   marqueeRef.current = marquee;
+
+  /** Convert IDs to SelectedItems with labels from the map. */
+  const withLabels = useCallback((ids: string[]): SelectedItem[] => {
+    return ids.map((id) => ({
+      id,
+      label: labelMap.current.get(id) || id,
+    }));
+  }, []);
 
   /** Fit SVG to viewport with padding. */
   const fitToView = useCallback(() => {
@@ -226,6 +253,12 @@ export default function DiagramView({
       // Read natural dimensions
       svgSize.current = getSvgDimensions(svgEl);
 
+      // Build label map from all selectable elements
+      labelMap.current.clear();
+      svgEl.querySelectorAll("g[id]:not([id^='_'])").forEach((el) => {
+        labelMap.current.set(el.id, extractElementLabel(el));
+      });
+
       injectSelectionStyles(svgEl);
       applyHighlights(containerRef.current, selectedRef.current);
 
@@ -239,9 +272,9 @@ export default function DiagramView({
   // Re-apply highlights when selection changes
   useEffect(() => {
     if (containerRef.current) {
-      applyHighlights(containerRef.current, selectedElements);
+      applyHighlights(containerRef.current, selectedIds);
     }
-  }, [selectedElements]);
+  }, [selectedIds]);
 
   // Toggle selection mode
   const toggleSelectionMode = useCallback(() => {
@@ -297,9 +330,11 @@ export default function DiagramView({
       if (clickedId) {
         const already = selectedRef.current.includes(clickedId);
         if (already) {
-          onSelectionChange(selectedRef.current.filter((id) => id !== clickedId));
+          const newIds = selectedRef.current.filter((id) => id !== clickedId);
+          onSelectionChange(withLabels(newIds));
         } else {
-          onSelectionChange([...selectedRef.current, clickedId]);
+          const newIds = [...selectedRef.current, clickedId];
+          onSelectionChange(withLabels(newIds));
         }
       } else {
         if (selectedRef.current.length > 0) {
@@ -376,9 +411,9 @@ export default function DiagramView({
 
             if (e.shiftKey && selectedRef.current.length > 0) {
               const merged = new Set([...selectedRef.current, ...selected]);
-              onSelectionChange(Array.from(merged));
+              onSelectionChange(withLabels(Array.from(merged)));
             } else {
-              onSelectionChange(selected);
+              onSelectionChange(withLabels(selected));
             }
           }
         }
@@ -513,7 +548,7 @@ export default function DiagramView({
       )}
 
       {/* Selection count */}
-      {selectedElements.length > 0 && (
+      {selectedIds.length > 0 && (
         <div
           style={{
             position: "absolute",
@@ -529,7 +564,7 @@ export default function DiagramView({
             boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
           }}
         >
-          {selectedElements.length} selected
+          {selectedIds.length} selected
         </div>
       )}
 
