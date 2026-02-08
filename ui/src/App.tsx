@@ -401,7 +401,7 @@ function App() {
         selectedIds={selectedIds}
         onSelectionChange={setSelectedItems}
       />
-      <SendButton changeCount={changeCount} onClick={handleSendToAgent} theme={theme} />
+      <SendButton changeCount={changeCount} selectionCount={selectedIds.length} onClick={handleSendToAgent} theme={theme} />
     </div>
   );
 

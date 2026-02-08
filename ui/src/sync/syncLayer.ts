@@ -20,26 +20,28 @@ function formatSelection(items: SelectedItem[]): string {
 
 /**
  * Silent sync: push current diagram state to AI context.
- * Does NOT trigger an AI response.
+ * Does NOT trigger an AI response. Uses updateModelContext which the host
+ * SHOULD surface to the AI on the next user message.
  */
-export function silentSync(
+export async function silentSync(
   app: McpApp | null,
   plantUmlCode: string,
   selectedItems: SelectedItem[],
   diagramType: string,
-): void {
+): Promise<void> {
   if (!app) return;
 
   const parts = [
-    `Current diagram type: ${diagramType}`,
+    `[PlantUML App — Live State]`,
+    `Diagram type: ${diagramType}`,
     `Selected elements: ${formatSelection(selectedItems)}`,
     "",
-    "PlantUML code:",
+    "Current PlantUML code:",
     plantUmlCode,
   ];
 
   try {
-    app.updateModelContext({
+    await app.updateModelContext({
       content: [{ type: "text", text: parts.join("\n") }],
     });
   } catch {
@@ -49,7 +51,7 @@ export function silentSync(
 
 /**
  * Send to Agent: send delta changes + full state to AI.
- * DOES trigger an AI response.
+ * DOES trigger an AI response via sendMessage.
  */
 export function sendToAgent(
   app: McpApp | null,
@@ -69,7 +71,11 @@ export function sendToAgent(
     parts.push(delta);
   }
 
-  parts.push(`Currently selected: ${formatSelection(selectedItems)}`);
+  if (selectedItems.length > 0) {
+    parts.push(`User selected these elements in the diagram: ${formatSelection(selectedItems)}`);
+    parts.push("When the user refers to \"these\", \"selected\", or \"this\" without naming specific elements, they mean the above selected elements.");
+  }
+
   parts.push("");
   parts.push(`Full PlantUML code (${diagramType}):`);
   parts.push(plantUmlCode);
