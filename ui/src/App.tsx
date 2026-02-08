@@ -5,6 +5,7 @@ import CodeEditor from "./components/CodeEditor";
 import ViewSwitch, { type ViewMode } from "./components/ViewSwitch";
 import SendButton from "./components/SendButton";
 import ExportButton from "./components/ExportButton";
+import CopyButton from "./components/CopyButton";
 import { detectDiagramType } from "./engine/detect";
 import { renderPlantUml, isSvgError } from "./engine/render";
 import { ChangeLog } from "./sync/changeLog";
@@ -90,21 +91,41 @@ function App() {
   // Compute root height
   const rootHeight = isFullscreen ? "100vh" : hostHeight;
 
-  /** Render PlantUML code to SVG with debounce. */
-  const scheduleRender = useCallback((code: string) => {
-    if (renderTimer.current) clearTimeout(renderTimer.current);
-
-    renderTimer.current = setTimeout(async () => {
-      const version = ++renderVersion.current;
+  /** Actually perform the render (shared by debounce and interval).
+   *  When isStreaming=true: auto-close missing @enduml, swallow errors silently,
+   *  keep last good SVG on failure, skip error auto-fix. */
+  const doRender = useCallback(async (code: string, isStreaming = false) => {
+    const version = ++renderVersion.current;
+    if (!isStreaming) {
       setRenderLoading(true);
       setRenderError(null);
+    }
 
-      try {
-        const svg = await renderPlantUml(code);
-        if (version !== renderVersion.current) return; // stale
+    // During streaming, auto-close incomplete PlantUML so the server can render it
+    let renderCode = code;
+    if (isStreaming) {
+      const trimmed = code.trimEnd();
+      if (!trimmed.match(/@end(uml|ditaa|salt|gantt|mindmap|wbs|json|yaml|nwdiag|regex)\s*$/i)) {
+        // Detect the @start type and add matching @end
+        const startMatch = trimmed.match(/@start(\w+)/i);
+        const endTag = startMatch ? `@end${startMatch[1]}` : "@enduml";
+        renderCode = trimmed + "\n" + endTag;
+      }
+    }
+
+    try {
+      const svg = await renderPlantUml(renderCode);
+      if (version !== renderVersion.current) return; // stale
+
+      if (isStreaming) {
+        // During streaming: only update SVG if it's not an error
+        if (!isSvgError(svg)) {
+          setSvgContent(svg);
+          setRenderError(null);
+        }
+        // If it IS an error SVG during streaming, silently ignore — keep last good SVG
+      } else {
         setSvgContent(svg);
-
-        // Check if the SVG contains a PlantUML error (syntax errors render as SVG with error text)
         if (isSvgError(svg)) {
           setRenderError("PlantUML syntax error");
           scheduleErrorAutoFix("PlantUML syntax error — the diagram SVG shows an error", code);
@@ -112,17 +133,54 @@ function App() {
           setRenderError(null);
           errorAlreadySent.current = null;
         }
-      } catch (err) {
-        if (version !== renderVersion.current) return;
+      }
+    } catch (err) {
+      if (version !== renderVersion.current) return;
+      // During streaming: silently ignore fetch errors (server 400/500 on incomplete code)
+      if (!isStreaming) {
         const msg = err instanceof Error ? err.message : String(err);
         setRenderError(msg);
-      } finally {
-        if (version === renderVersion.current) {
-          setRenderLoading(false);
-        }
       }
-    }, 800);
+    } finally {
+      if (version === renderVersion.current && !isStreaming) {
+        setRenderLoading(false);
+      }
+    }
   }, []);
+
+  /** Render PlantUML code to SVG with debounce. */
+  const scheduleRender = useCallback((code: string) => {
+    if (renderTimer.current) clearTimeout(renderTimer.current);
+    renderTimer.current = setTimeout(() => doRender(code, false), 800);
+  }, [doRender]);
+
+  // Streaming interval render: during streaming, render every 2s so user sees progress
+  const streamingRenderTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const latestCode = useRef(plantUmlCode);
+  latestCode.current = plantUmlCode;
+
+  useEffect(() => {
+    if (streaming) {
+      // Render once immediately with streaming mode
+      doRender(latestCode.current, true);
+      // Then render at intervals
+      streamingRenderTimer.current = setInterval(() => {
+        doRender(latestCode.current, true);
+      }, 2000);
+    } else {
+      // Stop interval when streaming ends
+      if (streamingRenderTimer.current) {
+        clearInterval(streamingRenderTimer.current);
+        streamingRenderTimer.current = null;
+      }
+    }
+    return () => {
+      if (streamingRenderTimer.current) {
+        clearInterval(streamingRenderTimer.current);
+        streamingRenderTimer.current = null;
+      }
+    };
+  }, [streaming, doRender]);
 
   /** Schedule error auto-fix: debounce 3s, send to AI. */
   const scheduleErrorAutoFix = useCallback(
@@ -362,14 +420,23 @@ function App() {
         display: "flex",
         flexDirection: "column",
         backgroundColor: colors.canvasBg,
-        color: theme === "dark" ? "#e2e8f0" : "#1a202c",
+        color: theme === "dark" ? "#e4e4e7" : "#09090b",
         transition: "background-color 0.2s, color 0.2s",
         borderRadius: isFullscreen ? 0 : undefined,
       }}
     >
+      {/* Global styles */}
       <style>{`
         .plantuml-app-root:hover .fullscreen-btn { opacity: 0.7 !important; }
         .fullscreen-btn:hover { opacity: 1 !important; }
+        .fullscreen-btn:focus-visible { opacity: 1 !important; outline: 2px solid ${colors.accent}; outline-offset: 1px; }
+        @keyframes streaming-pulse {
+          0%,100% { opacity: 0.4; }
+          50% { opacity: 1; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .streaming-indicator { animation: none !important; opacity: 0.7 !important; }
+        }
       `}</style>
 
       {/* Toolbar */}
@@ -380,31 +447,59 @@ function App() {
           justifyContent: "space-between",
           padding: "6px 12px",
           borderBottom: `1px solid ${colors.toolbarBorder}`,
-          backgroundColor: colors.toolbarBg,
+          background: colors.toolbarBg,
           flexShrink: 0,
-          transition: "background-color 0.2s, border-color 0.2s",
+          transition: "all 0.2s ease",
         }}
       >
-        <div style={{ fontSize: 13, color: colors.toolbarLabel, fontWeight: 500 }}>
-          PlantUML
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          minWidth: 80,
+        }}>
+          <div style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            backgroundColor: colors.accent,
+            flexShrink: 0,
+          }} />
+          <span style={{
+            fontSize: 11,
+            color: colors.toolbarLabel,
+            fontWeight: 600,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase" as const,
+          }}>
+            PlantUML
+          </span>
         </div>
         <ViewSwitch mode={viewMode} onChange={setViewMode} theme={theme} />
-        <ExportButton svgContent={svgContent} plantUmlCode={plantUmlCode} theme={theme} />
+        <div style={{ display: "flex", gap: 4, alignItems: "center", minWidth: 80, justifyContent: "flex-end" }}>
+          <CopyButton code={plantUmlCode} theme={theme} />
+          <ExportButton svgContent={svgContent} plantUmlCode={plantUmlCode} theme={theme} />
+        </div>
       </div>
 
-      {/* Status indicators */}
+      {/* Streaming indicator */}
       {streaming && (
         <div
+          className="streaming-indicator"
           style={{
-            padding: "4px 12px",
+            padding: "3px 12px",
             textAlign: "center",
-            opacity: 0.7,
-            fontSize: 13,
+            fontSize: 11,
+            fontWeight: 500,
+            letterSpacing: "0.02em",
             flexShrink: 0,
-            color: colors.toolbarLabel,
+            color: colors.accent,
+            borderBottom: `1px solid ${colors.toolbarBorder}`,
+            background: colors.accentMuted,
+            animation: "streaming-pulse 2s ease-in-out infinite",
           }}
         >
-          Receiving diagram...
+          Receiving diagram
         </div>
       )}
 
@@ -445,7 +540,7 @@ function App() {
           <button
             className="fullscreen-btn"
             onClick={handleToggleFullscreen}
-            title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
             style={{
               position: "absolute",
               bottom: 16,
@@ -463,7 +558,7 @@ function App() {
               color: colors.zoomText,
               cursor: "pointer",
               fontSize: 14,
-              boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
+              boxShadow: theme === "dark" ? "0 2px 8px rgba(0,0,0,0.4)" : "0 1px 4px rgba(0,0,0,0.08)",
               transition: "opacity 0.2s",
             }}
           >

@@ -41,24 +41,43 @@ export default function ExportButton({ svgContent, plantUmlCode, theme = "light"
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
+      <style>{`
+        .export-trigger:hover {
+          background-color: ${colors.exportHover} !important;
+          color: ${colors.switchActiveText} !important;
+        }
+        .export-trigger:focus-visible, .export-item:focus-visible {
+          box-shadow: inset 0 0 0 1.5px ${colors.accent} !important;
+          outline: none;
+        }
+        .export-item:hover:not(:disabled) {
+          background-color: ${colors.exportHover} !important;
+          color: ${colors.switchActiveText} !important;
+        }
+      `}</style>
       <button
         type="button"
+        className="export-trigger"
         onClick={() => setOpen(!open)}
         style={{
-          padding: "4px 10px",
-          fontSize: 13,
+          padding: "2px 8px",
+          fontSize: 11,
           fontWeight: 500,
-          lineHeight: "22px",
+          lineHeight: "18px",
           cursor: "pointer",
           border: `1px solid ${colors.exportBorder}`,
-          borderRadius: 6,
+          borderRadius: 5,
           backgroundColor: colors.exportBg,
           color: colors.exportText,
-          transition: "background-color 0.15s",
+          transition: "all 0.15s ease",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
+          outline: "none",
         }}
         title="Export diagram"
       >
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "middle", marginRight: 4 }}>
+        <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M7 1v8M3 6l4 4 4-4M2 12h10" />
         </svg>
         Export
@@ -71,42 +90,43 @@ export default function ExportButton({ svgContent, plantUmlCode, theme = "light"
             top: "100%",
             right: 0,
             marginTop: 4,
-            minWidth: 120,
-            backgroundColor: colors.exportBg,
-            border: `1px solid ${colors.exportBorder}`,
-            borderRadius: 8,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+            minWidth: 110,
+            backgroundColor: colors.switchBg,
+            border: `1px solid ${colors.switchBorder}`,
+            borderRadius: 6,
+            boxShadow: theme === "dark"
+              ? "0 4px 16px rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.3)"
+              : "0 4px 16px rgba(0,0,0,0.1), 0 1px 4px rgba(0,0,0,0.05)",
             zIndex: 50,
             overflow: "hidden",
+            padding: 2,
           }}
         >
           <button
             type="button"
+            className="export-item"
             onClick={handleExportSvg}
             disabled={!svgContent}
             style={{
               ...dropdownItemStyle,
               color: colors.exportText,
-              opacity: svgContent ? 1 : 0.4,
+              opacity: svgContent ? 1 : 0.3,
             }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.backgroundColor = colors.exportHover; }}
-            onMouseLeave={(e) => { (e.target as HTMLElement).style.backgroundColor = "transparent"; }}
           >
-            Export SVG
+            SVG
           </button>
           <button
             type="button"
+            className="export-item"
             onClick={handleExportPng}
             disabled={!plantUmlCode.trim()}
             style={{
               ...dropdownItemStyle,
               color: colors.exportText,
-              opacity: plantUmlCode.trim() ? 1 : 0.4,
+              opacity: plantUmlCode.trim() ? 1 : 0.3,
             }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.backgroundColor = colors.exportHover; }}
-            onMouseLeave={(e) => { (e.target as HTMLElement).style.backgroundColor = "transparent"; }}
           >
-            Export PNG
+            PNG
           </button>
         </div>
       )}
@@ -117,11 +137,13 @@ export default function ExportButton({ svgContent, plantUmlCode, theme = "light"
 const dropdownItemStyle: React.CSSProperties = {
   display: "block",
   width: "100%",
-  padding: "8px 16px",
-  fontSize: 13,
+  padding: "5px 12px",
+  fontSize: 11,
+  fontWeight: 500,
   textAlign: "left",
   border: "none",
+  borderRadius: 4,
   backgroundColor: "transparent",
   cursor: "pointer",
-  transition: "background-color 0.1s",
+  transition: "all 0.1s ease",
 };
