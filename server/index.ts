@@ -78,8 +78,8 @@ Syntax notes (PlantUML server uses latest syntax):
             _meta: {
               ui: {
                 csp: {
-                  connectDomains: ["https://www.plantuml.com"],
-                  resourceDomains: ["https://www.plantuml.com"],
+                  connectDomains: ["https://www.plantuml.com", "https://esm.sh"],
+                  resourceDomains: ["https://www.plantuml.com", "https://esm.sh"],
                 },
               },
             },
